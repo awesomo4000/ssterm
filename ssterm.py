@@ -40,7 +40,7 @@ import string
 ###############################################################################
 
 # Default TTY Options
-# pylint: disable=bad-continuation,invalid-name
+# pylint: disable=bad-continuation,invalid-name,missing-docstring
 TTY_Options = {
                 'baudrate': 115200,
                 'databits': 8,
@@ -52,6 +52,7 @@ TTY_Options = {
 # Default Formatting Options
 Format_Options = {
                'output_mode': 'raw',       # 'split', 'splitfull', 'hex','hexnl'
+                                           # 'lines'
                'input_mode': 'raw',        # 'hex'
                'transmit_newline': "raw",  # 'cr', 'crlf', 'lf', 'none'
                'receive_newline': "raw",   # 'cr', 'crlf', 'lf', 'crorlf'
@@ -79,7 +80,9 @@ Color_Codes = [ "\x1b[1;30;41m", "\x1b[1;30;42m", "\x1b[1;30;43m",
 Color_Code_Reset = "\x1b[0m"
 
 # Read buffer size
-READ_BUF_SIZE = 4096
+#READ_BUF_SIZE = 4096
+#READ_BUF_SIZE = 32
+READ_BUF_SIZE = 2
 
 # Newline Substitution tables
 RX_Newline_Sub = {'raw': None, 'cr': "\r", 'crlf': "\r\n", 'lf': "\n", 
@@ -87,11 +90,15 @@ RX_Newline_Sub = {'raw': None, 'cr': "\r", 'crlf': "\r\n", 'lf': "\n",
 TX_Newline_Sub = {'raw': None, 'cr': "\r", 'crlf': "\r\n", 'lf': "\n", 
                   'none': ""}
 
+# Filter list
+Filter_Strings = set([])
+
 ###############################################################################
 ### Serial Helper Functions
 ###############################################################################
 
-def serial_open(device_path, baudrate, databits, stopbits, parity, flow_control):
+def serial_open(device_path, baudrate, databits, stopbits, parity,
+                flow_control):
     # Open the tty device
     try:
         fd = os.open(device_path, os.O_RDWR | os.O_NOCTTY)
@@ -271,7 +278,7 @@ def stdin_reset():
         raise Exception("Getting stdin tty options: %s" % str(err))
 
     # Enable canonical input, echo, signals -- stdin_attr[cflag]
-    stdin_attr[3] |= (termios.ICANON | termios.ECHO | termios.ECHOE | 
+    stdin_attr[3] |= (termios.ICANON | termios.ECHO | termios.ECHOE |
                       termios.ISIG)
 
     # Re-enable XON/XOFF interpretation -- stdin_attr[iflag]
@@ -484,6 +491,28 @@ def output_processor_split(color_chars=[], partial_lines=True):
         return nbuf
     return f
 
+def output_processor_lines(delimiter='\r\n'):
+    """ Accumulate lines """
+    acc = [""]  # line accumulator
+    def f(buf):
+        acc[0] += buf
+        if not delimiter in acc[0]:
+            return ''
+        pos = acc[0].rfind(delimiter) + len(delimiter)
+        ret = acc[0][:pos]
+        acc[0] = acc[0][pos:]
+        return ret #repr(ret)[1:-1]+'\n'
+    return f
+
+def output_processor_exclude(ex):
+    """ exclude a line containing a string """
+    ex = ex
+    def f(buf):
+        if buf.find(ex) != -1:
+            return ''
+        return buf
+    return f
+
 ###############################################################################
 ### Main Read/Write Loop
 ###############################################################################
@@ -501,6 +530,10 @@ def read_write_loop(serial_fd, stdin_fd, stdout_fd):
 
     ### Prepare our output pipeline
     output_pipeline = []
+
+    #for exclude in Filter_Strings:
+    #    output_pipeline.append(output_processor_exclude(exclude))
+
     # Receive newline substitution
     if RX_Newline_Sub[Format_Options['receive_newline']] is not None:
         output_pipeline.append(output_processor_newline(
@@ -525,6 +558,11 @@ def read_write_loop(serial_fd, stdin_fd, stdout_fd):
     elif Format_Options['output_mode'] == 'hexnl':
         output_pipeline.append(output_processor_hexadecimal(
             Format_Options['color_chars'], interpret_newlines=True))
+    elif Format_Options['output_mode'] == 'lines':
+        output_pipeline.append(output_processor_lines())
+
+    for exclude in Filter_Strings:
+        output_pipeline.append(output_processor_exclude(exclude))
 
     # Select between serial port and stdin file descriptors
     read_fds = [serial_fd, stdin_fd]
@@ -600,6 +638,7 @@ def print_usage():
                                  "splitfull hex./ASCII split with full lines\n"\
 "                                  hex       hex.\n"\
 "                                  hexnl     hex. with newlines\n"\
+"                                  lines     output full lines\n"\
 "\n"\
 "  --rx-nl <substitution>        "\
             "Enable substitution of the specified newline\n"\
@@ -622,6 +661,9 @@ def print_usage():
 "\n"\
 "  -e, --echo                    Enable local character echo\n"\
 "\n"\
+"Filter Output Options:\n"\
+"  -x, --exclude <string>         Do not output buffer containing string\n"\
+"\n"\
 "Miscellaneous:\n"\
 "  -h, --help                    Display this usage/help\n"\
 "  -v, --version                 Display the program's version\n\n"\
@@ -634,12 +676,12 @@ def print_usage():
           " input mode: raw  | tx newline: raw | local echo: off" % sys.argv[0]
 
 def print_version():
-    print "ssterm version 2.0 - 09/16/2014"
+    print "ssterm version 2.01 - 02/26/2016"
 
 if __name__ == '__main__':
     # Parse options
     try:
-        options, args = getopt.gnu_getopt(sys.argv[1:], "b:d:p:t:f:o:c:i:ehv",
+        options, args = getopt.gnu_getopt(sys.argv[1:], "b:d:p:t:f:o:c:i:x:ehv",
                 ["baudrate=", "databits=", "parity=", "stopbits=",
                  "flow-control=", "output=", "color=", "rx-nl=", "input=",
                  "tx-nl=", "echo", "help", "version"])
@@ -676,7 +718,8 @@ if __name__ == '__main__':
 
         # Output Formatting Options
         elif opt in ("-o", "--output"):
-            if not opt_arg in ["raw", "split", "splitfull", "hex", "hexnl"]:
+            if not opt_arg in ["raw", "split", "splitfull", "hex", "hexnl",
+                               "lines"]:
                 sys.stderr.write("Error: Invalid output mode!\n")
                 print_usage()
                 sys.exit(-1)
@@ -730,6 +773,10 @@ if __name__ == '__main__':
             Format_Options['receive_newline'] = opt_arg
         elif opt in ("-e", "--echo"):
             Format_Options['echo'] = True
+
+        # Filter options
+        elif opt in ("-x", "--exclude"):
+            Filter_Strings.add(opt_arg)
 
         # Miscellaneous Options
         elif opt in ("-h", "--help"):

@@ -3,6 +3,8 @@ import ssterm
 import os
 import unittest
 
+# pylint: disable=bad-continuation,invalid-name,missing-docstring
+
 class TestInputProcessors(unittest.TestCase):
     def test_processor_newline(self):
         f = ssterm.input_processor_newline("abc")
@@ -129,6 +131,23 @@ class TestOutputProcessors(unittest.TestCase):
                 ssterm.Color_Codes[0] + "A" + ssterm.Color_Code_Reset + 
                 ssterm.Color_Codes[1] + "B" + ssterm.Color_Code_Reset + 
                 "C" + "            |")
+
+    def test_processor_exclude(self):
+        f = ssterm.output_processor_exclude("byebye")
+
+        self.assertEqual(f(""), "")
+        self.assertEqual(f("byebye"), "")
+        self.assertEqual(f("goodline"), "goodline")
+        self.assertEqual(f("\x12\x13\x41"), "\x12\x13\x41")
+
+    def test_processor_lines(self):
+        f = ssterm.output_processor_lines()
+        self.assertEqual(f("\r\n"), "\r\n")
+        f = ssterm.output_processor_lines()
+        self.assertEqual(f("aaaa\r\n"), "aaaa\r\n")
+        f = ssterm.output_processor_lines()
+        self.assertEqual(f("aaaa"), "")
+        self.assertEqual(f("\r\n"), "aaaa\r\n")
 
 if __name__ == '__main__':
     unittest.main()
